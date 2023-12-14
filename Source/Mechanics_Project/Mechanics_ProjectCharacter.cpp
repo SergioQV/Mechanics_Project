@@ -9,7 +9,7 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
-
+#include "DrawDebugHelpers.h"
 
 //////////////////////////////////////////////////////////////////////////
 // AMechanics_ProjectCharacter
@@ -56,6 +56,9 @@ void AMechanics_ProjectCharacter::BeginPlay()
 	// Call the base class  
 	Super::BeginPlay();
 
+	GetCapsuleComponent()->OnComponentHit.AddDynamic(this, &AMechanics_ProjectCharacter::PlayerColission);
+	
+
 	//Add Input Mapping Context
 	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
 	{
@@ -65,6 +68,23 @@ void AMechanics_ProjectCharacter::BeginPlay()
 		}
 	}
 }
+
+void AMechanics_ProjectCharacter::PlayerColission(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit)
+{
+
+	//calculate the angle between forward vector and ImpactNormalVector
+
+	
+	float DotProduct = FVector::DotProduct(GetActorForwardVector(), -Hit.ImpactNormal);
+
+	float Angle = FMath::RadiansToDegrees(FMath::Acos(DotProduct));
+	
+	if (Angle < 45 && OtherComp->GetCollisionObjectType() == ECC_WorldStatic) {
+		DrawDebugLine(GetWorld(), Hit.ImpactPoint, Hit.ImpactPoint + Hit.ImpactNormal * 300.f, FColor::Red, false, 4.f, 0.f, 1.f);
+	}
+
+}
+
 
 //////////////////////////////////////////////////////////////////////////
 // Input
