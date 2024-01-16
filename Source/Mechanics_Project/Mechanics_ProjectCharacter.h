@@ -37,6 +37,7 @@ class AMechanics_ProjectCharacter : public ACharacter
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	class UInputAction* LookAction;
 
+
 public:
 	AMechanics_ProjectCharacter();
 	
@@ -64,8 +65,27 @@ public:
 	FORCEINLINE class UCameraComponent* GetFollowCamera() const { return FollowCamera; }
 
 private:
-	UFUNCTION()
-	void PlayerColission(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit);
 
+	FTimerHandle JumpWallTimerHandle;
+
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = WallJump, meta = (AllowPrivateAccess = "true"))
+	bool bWaitingForJumpInWall;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = WallJump, meta = (AllowPrivateAccess = "true"))
+	bool bIsFallingFromWallCollision;
+
+	UFUNCTION()
+	void SetWallJumpIfApplies(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit);
+
+	float AngleWithForwardVector(FVector Other);
+
+	bool IsValidCollisionForWallJump(AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector ImpactNormal);
+
+	void StopWallWaiting();
+
+	void CheckIfCollisionWithGround();
+
+	void CustomJump();
 };
 

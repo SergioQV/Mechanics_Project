@@ -10,6 +10,7 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "DrawDebugHelpers.h"
+#include "Kismet/KismetMathLibrary.h"
 
 //////////////////////////////////////////////////////////////////////////
 // AMechanics_ProjectCharacter
@@ -49,6 +50,7 @@ AMechanics_ProjectCharacter::AMechanics_ProjectCharacter()
 
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
 	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
+	bIsFallingFromWallCollision = false;
 }
 
 void AMechanics_ProjectCharacter::BeginPlay()
@@ -56,7 +58,7 @@ void AMechanics_ProjectCharacter::BeginPlay()
 	// Call the base class  
 	Super::BeginPlay();
 
-	GetCapsuleComponent()->OnComponentHit.AddDynamic(this, &AMechanics_ProjectCharacter::PlayerColission);
+	GetCapsuleComponent()->OnComponentHit.AddDynamic(this, &AMechanics_ProjectCharacter::SetWallJumpIfApplies);
 	
 
 	//Add Input Mapping Context
@@ -69,22 +71,74 @@ void AMechanics_ProjectCharacter::BeginPlay()
 	}
 }
 
-void AMechanics_ProjectCharacter::PlayerColission(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit)
+void AMechanics_ProjectCharacter::SetWallJumpIfApplies(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit)
 {
 
-	//calculate the angle between forward vector and ImpactNormalVector
+	CheckIfCollisionWithGround();
 
+	if (!IsValidCollisionForWallJump(OtherActor, OtherComp, -Hit.ImpactNormal)) return;
 	
-	float DotProduct = FVector::DotProduct(GetActorForwardVector(), -Hit.ImpactNormal);
-
-	float Angle = FMath::RadiansToDegrees(FMath::Acos(DotProduct));
+	DrawDebugLine(GetWorld(), Hit.ImpactPoint, Hit.ImpactPoint + Hit.ImpactNormal * 300.f, FColor::Red, false, 1.f, 0.f, 1.f);	
 	
-	if (Angle < 45 && OtherComp->GetCollisionObjectType() == ECC_WorldStatic) {
-		DrawDebugLine(GetWorld(), Hit.ImpactPoint, Hit.ImpactPoint + Hit.ImpactNormal * 300.f, FColor::Red, false, 4.f, 0.f, 1.f);
-	}
+	FRotator DirtyRotation = UKismetMathLibrary::MakeRotFromX(Hit.ImpactPoint - GetActorLocation());
+	FRotator RotationToWall(0.f, DirtyRotation.Yaw, 0.f);
 
+	SetActorRotation(RotationToWall);
+
+	//if (Hit.ImpactPoint.Z >= GetActorLocation().Z) {
+		GetCharacterMovement()->SetMovementMode(EMovementMode::MOVE_Flying);
+		GetCharacterMovement()->StopMovementImmediately();
+		GetCharacterMovement()->BrakingDecelerationFlying = 2000.f;
+
+
+		bWaitingForJumpInWall = true;
+
+		GetWorld()->GetTimerManager().SetTimer(JumpWallTimerHandle, this, &AMechanics_ProjectCharacter::StopWallWaiting, 0.4f, false);
+	//}
 }
 
+#pragma region WallJumpUtils
+float AMechanics_ProjectCharacter::AngleWithForwardVector(FVector Other)
+{
+	float DotProduct = FVector::DotProduct(GetActorForwardVector(), Other);
+
+	float Angle = FMath::RadiansToDegrees(FMath::Acos(DotProduct));
+
+	return Angle;
+}
+
+bool AMechanics_ProjectCharacter::IsValidCollisionForWallJump(AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector ImpactNormal)
+{
+
+	if (!GetMovementComponent()->IsFalling()) return false;
+	if (bIsFallingFromWallCollision) return false;
+	if (OtherComp->GetCollisionObjectType() != ECC_WorldStatic) return false;
+	if (OtherActor->GetActorRotation().Pitch != 0) return false;
+	if (OtherActor->GetActorRotation().Roll != 0) return false;
+
+	//calculate the angle between forward vector and ImpactNormalVector
+	float Angle = AngleWithForwardVector(ImpactNormal);
+
+	if (Angle >= 45) return false;
+
+	return true;
+}
+void AMechanics_ProjectCharacter::StopWallWaiting()
+{
+	GetCharacterMovement()->SetMovementMode(EMovementMode::MOVE_Falling);
+	GetCharacterMovement()->StopMovementImmediately();
+	GetCharacterMovement()->BrakingDecelerationFlying = 0.f;
+	bWaitingForJumpInWall = false;
+	bIsFallingFromWallCollision = true;
+}
+void AMechanics_ProjectCharacter::CheckIfCollisionWithGround()
+{
+	if (GetCharacterMovement()->Velocity.Z == 0) {
+		bIsFallingFromWallCollision = false;
+	} 
+}
+
+#pragma endregion
 
 //////////////////////////////////////////////////////////////////////////
 // Input
@@ -95,7 +149,7 @@ void AMechanics_ProjectCharacter::SetupPlayerInputComponent(class UInputComponen
 	if (UEnhancedInputComponent* EnhancedInputComponent = CastChecked<UEnhancedInputComponent>(PlayerInputComponent)) {
 		
 		//Jumping
-		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Triggered, this, &ACharacter::Jump);
+		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &AMechanics_ProjectCharacter::CustomJump);
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
 
 		//Moving
@@ -110,6 +164,9 @@ void AMechanics_ProjectCharacter::SetupPlayerInputComponent(class UInputComponen
 
 void AMechanics_ProjectCharacter::Move(const FInputActionValue& Value)
 {
+
+	if (bWaitingForJumpInWall) return;
+
 	// input is a Vector2D
 	FVector2D MovementVector = Value.Get<FVector2D>();
 
@@ -145,5 +202,27 @@ void AMechanics_ProjectCharacter::Look(const FInputActionValue& Value)
 }
 
 
+void AMechanics_ProjectCharacter::CustomJump()
+{
+	if (!bWaitingForJumpInWall) {
+		Super::Jump();
+	}
+	else {
 
+		bWaitingForJumpInWall = false;
+
+		GetWorld()->GetTimerManager().ClearTimer(JumpWallTimerHandle);
+
+		FRotator JumpBackRotation = GetActorRotation() + FRotator(0.f, 180.f, 0.f);
+		SetActorRotation(JumpBackRotation);
+
+
+
+		FVector LaunchVelocity = 600*GetActorForwardVector() + FVector(0, 0.f, 500.f);
+
+		UE_LOG(LogTemp, Warning, TEXT("Actor location: %s"), *LaunchVelocity.ToString());
+
+		LaunchCharacter(LaunchVelocity, true, true);
+	}
+}
 
